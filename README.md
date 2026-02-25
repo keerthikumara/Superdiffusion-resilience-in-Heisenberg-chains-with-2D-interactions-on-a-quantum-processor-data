@@ -5,7 +5,7 @@ This repository contains the datasets and supporting scripts used in the manuscr
 
 ## Repository Structure
 
-### `./scripts`
+### `./scripts/`
 Contains the Python scripts used to construct and initialize the quantum circuits employed in both classical and hardware simulations.
 
 ### `./Noiseless simulations`

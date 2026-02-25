@@ -13,7 +13,7 @@ This repository contains the datasets and supporting scripts used in the manuscr
 - [`./Noiseless simulations/`](./Noiseless%20simulations/)  
   Includes all simulation data generated using **Qiskit Aer** and **Matrix Product State (MPS)** methods. These files correspond to the noiseless numerical results analyzed in the manuscript.
 
-- [`./Hardware data/`](./Hardware%20data/)  
+- [`./hardware data/`](./hardware%20data/)  
   Provides hardware calibration information and all experimental data collected from the quantum processor used in the study.
 ---
 

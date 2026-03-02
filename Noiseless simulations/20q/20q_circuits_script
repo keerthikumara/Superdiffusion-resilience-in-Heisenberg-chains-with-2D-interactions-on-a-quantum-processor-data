@@ -1,0 +1,586 @@
+from qiskit_aer import Aer
+import os
+os.environ["OMP_NUM_THREADS"] = "32"
+
+backend=Aer.get_backend('statevector_simulator')
+backend.set_options(device="GPU")
+
+from qiskit import QuantumCircuit, transpile
+
+import os
+import numpy as np
+from numpy.random import uniform
+from numpy import kron, array
+from random import choice
+import scipy
+from scipy.stats import rv_continuous 
+from copy import deepcopy
+import pprint as pp
+from pprint import pprint
+from tqdm import tqdm
+import pickle
+
+
+from qiskit_aer import AerSimulator
+from qiskit.circuit import QuantumCircuit
+from qiskit.quantum_info import SparsePauliOp
+
+class sin_sampler_dist(rv_continuous):
+
+    def _pdf(self, theta):
+        return 0.5*np.sin(theta)
+
+sin_sampler = sin_sampler_dist(a=0, b=np.pi)
+
+class circuit_constructor:
+    
+    def __init__(self, **kwargs):
+        
+        self.coeff = kwargs['coeff_vector']
+        self.ladder_coupling_dict = kwargs["ladder_coupling_dict"]
+     
+    
+        
+        
+        
+        self.connectivity_list = kwargs["connectivity_list"]
+        
+        self.clean_qubit = kwargs["clean_qubit_index"]
+        self.probe_qubit = kwargs["probe_qubit_index"]
+        self.no_layers = kwargs["no_layers"]
+        self.time_list = kwargs["Evol_time_list"]
+        self.time_step = kwargs["time_step_length"]
+        self.kappa = kwargs["kappa"]
+        self.int_type = kwargs["int_type"]
+      
+        
+        #self.session_driver()
+    
+       
+    def Trotter_circuit_new(self):
+        
+        for top_list_index, top_list in enumerate(self.connectivity_list):
+                
+            for q in top_list: 
+                if q not in list(self.ladder_coupling_dict.keys()):
+                    #print("normal", q, self.coeff[0], self.coeff[1], self.coeff[2])
+                    theta_x = 0.25*(self.coeff[0]*self.time_step)
+                    theta_y = 0.25*(self.coeff[1]*self.time_step)
+                    theta_z = 0.25*(self.coeff[2]*self.time_step)
+
+                    self.circuit.cx(q[0], q[1])
+                    self.circuit.rx(2*theta_x, q[0])
+                    # self.circuit.h(q[1])
+                    self.circuit.rz(2*theta_z, q[1])
+                    # self.circuit.h(q[1])
+    
+                    self.circuit.h(q[0])
+                    self.circuit.cx(q[0], q[1])
+                    self.circuit.rz(-np.pi/2, q[0])
+                    self.circuit.h(q[0])
+                    # self.circuit.h(q[1])
+                    self.circuit.rz(-2*theta_y, q[1])
+                    # self.circuit.h(q[1])
+    
+                    self.circuit.cx(q[0], q[1])
+                    self.circuit.rx(np.pi/2, q[0])
+                    self.circuit.rx(-np.pi/2, q[1])
+                
+                else:
+                   # print("ladder", q, self.ladder_coupling_dict[q][0], self.ladder_coupling_dict[q][1], self.ladder_coupling_dict[q][2])
+
+                    theta_x = 0.25*(self.ladder_coupling_dict[q][0]*self.time_step)*self.int_type[0][0]
+                    theta_y = 0.25*(self.ladder_coupling_dict[q][1]*self.time_step)*self.int_type[0][1]
+                    theta_z = 0.25*(self.ladder_coupling_dict[q][2]*self.time_step)*self.int_type[0][2]
+
+                    # print(theta_x,theta_y,theta_z)
+
+                    self.circuit.cx(q[0], q[1])
+                    self.circuit.rx(2*theta_x, q[0])
+                    # self.circuit.h(q[1])
+                    self.circuit.rz(2*theta_z, q[1])
+                    # self.circuit.h(q[1])
+    
+                    self.circuit.h(q[0])
+                    self.circuit.cx(q[0], q[1])
+                    self.circuit.rz(-np.pi/2, q[0])
+                    self.circuit.h(q[0])
+                    # self.circuit.h(q[1])
+                    self.circuit.rz(-2*theta_y, q[1])
+                    # self.circuit.h(q[1])
+    
+                    self.circuit.cx(q[0], q[1])
+                    self.circuit.rx(np.pi/2, q[0])
+                    self.circuit.rx(-np.pi/2, q[1])
+                    
+  
+        return self
+    
+    
+    def random_circuit_constructor(self):
+    
+    # generic brickwork ansatz of random gates, excluding clean_q
+        for _ in range(self.no_layers):
+            for top in self.connectivity_list:
+                for t in top:
+                    if t[0] != self.clean_qubit and t[1] != self.clean_qubit:
+                    
+                        self.circuit.h(t[0])
+                        self.circuit.rx(uniform(-np.pi, np.pi), t[0])
+                        self.circuit.h(t[0])
+                        self.circuit.ry(float(sin_sampler.rvs(size=1)), t[0])
+                        self.circuit.h(t[0])
+                        self.circuit.rx(uniform(-np.pi, np.pi), t[0])
+                        self.circuit.h(t[0])
+
+                        self.circuit.h(t[1])
+                        self.circuit.rx(uniform(-np.pi, np.pi), t[1])
+                        self.circuit.h(t[1])
+                        self.circuit.ry(float(sin_sampler.rvs(size=1)), t[1])
+                        self.circuit.h(t[1])
+                        self.circuit.rx(uniform(-np.pi, np.pi), t[1])
+                        self.circuit.h(t[1])
+
+                   
+                        self.circuit.cz(t[0], t[1])  
+        return self
+
+
+    def full_circuit_constructor(self, trotter_steps):
+        
+        self.circuit = QuantumCircuit(20, 1)
+    
+        # apply quasi haar random initial state, leaving qubit 'clean_q' in zero state
+        self.random_circuit_constructor()
+
+        self.circuit.barrier()
+    
+        # trotter evolution under XXZ Heisenberg hamiltonian
+        for _ in range(trotter_steps):
+            self.Trotter_circuit_new()
+        
+        # self.circuit.measure([self.probe_qubit], [0])
+
+        return self
+
+
+    def session_driver(self):
+      
+                
+        backend=Aer.get_backend('statevector_simulator')
+        backend.set_options(device="GPU")
+
+        circs = [self.full_circuit_constructor(int(time/self.time_step)).circuit for time in tqdm(self.time_list)]
+        Z_9 = SparsePauliOp.from_sparse_list([("Z", [9], 1)], 20)                
+
+        job = backend.run(circs)
+        self.result = job.result()
+        C00 = [self.result.results[k].data.statevector.expectation_value(Z_9) for k in range(len(circs))]
+
+        with open("20q_"+str(self.time_step)+str(self.int_type[1])+str(self.kappa)+".pkl", 'wb') as f:
+            pickle.dump(C00, f)
+
+        print(str(self.time_step) +"_" + str(self.int_type[1]) + "_" + str(self.kappa))
+
+
+        return self
+
+def linear_coloring1(qubits_list):
+    list1= []
+    list2 =[]
+    list3 =[]
+
+    i= 0
+    while (i<= len(qubits_list)-1):
+        # print(i)
+        list1.append((qubits_list[i],qubits_list[i+1]))
+        i=i+1
+        if(i>=len(qubits_list)-1):
+            break
+        # print(i)
+        list2.append((qubits_list[i],qubits_list[i+1]))
+        i=i+1
+        if(i>=len(qubits_list)-1):
+            break
+        list3.append((qubits_list[i],qubits_list[i+1]))
+        i=i+1
+        if(i>=len(qubits_list)-1):
+            break
+        list2.append((qubits_list[i],qubits_list[i+1]))
+        i=i+1
+        if(i>=len(qubits_list)-1):
+            break
+        list3.append((qubits_list[i],qubits_list[i+1]))
+        i=i+1
+        if(i>=len(qubits_list)-1):
+            break
+        list2.append((qubits_list[i],qubits_list[i+1]))
+        i=i+1
+        if(i>=len(qubits_list)-1):
+            break
+        list1.append((qubits_list[i],qubits_list[i+1]))
+        i=i+1
+        if(i>=len(qubits_list)-1):
+            break
+        list3.append((qubits_list[i],qubits_list[i+1]))
+        i=i+1
+        if(i>=len(qubits_list)-1):
+            break
+        list1.append((qubits_list[i],qubits_list[i+1]))
+        i=i+1
+        if(i>=len(qubits_list)-1):
+            break
+        list2.append((qubits_list[i],qubits_list[i+1]))
+        i=i+1
+        if(i>=len(qubits_list)-1):
+            break
+        list1.append((qubits_list[i],qubits_list[i+1]))
+        i=i+1
+        if(i>=len(qubits_list)-1):
+            break
+        list3.append((qubits_list[i],qubits_list[i+1]))
+        i=i+1
+        if(i>=len(qubits_list)-1):
+            break
+        
+        
+    return [list1,list2,list3]  
+
+
+
+def linear_coloring2(qubits_list):
+    list1= []
+    list2 =[]
+    list3 =[]
+
+    i= 0
+    while (i<= len(qubits_list)-1):
+        # print(i)
+        list2.append((qubits_list[i],qubits_list[i+1]))
+        i=i+1
+        if(i>=len(qubits_list)-1):
+            break
+        list1.append((qubits_list[i],qubits_list[i+1]))
+        i=i+1
+        if(i>=len(qubits_list)-1):
+            break
+        list3.append((qubits_list[i],qubits_list[i+1]))
+        i=i+1
+        if(i>=len(qubits_list)-1):
+            break
+        list1.append((qubits_list[i],qubits_list[i+1]))
+        i=i+1
+        if(i>=len(qubits_list)-1):
+            break
+        list2.append((qubits_list[i],qubits_list[i+1]))
+        i=i+1
+        if(i>=len(qubits_list)-1):
+            break
+        list3.append((qubits_list[i],qubits_list[i+1]))
+        i=i+1
+        if(i>=len(qubits_list)-1):
+            break
+        list2.append((qubits_list[i],qubits_list[i+1]))
+        i=i+1
+        if(i>=len(qubits_list)-1):
+            break
+        list3.append((qubits_list[i],qubits_list[i+1]))
+        i=i+1
+        if(i>=len(qubits_list)-1):
+            break
+        list2.append((qubits_list[i],qubits_list[i+1]))
+        i=i+1
+        if(i>=len(qubits_list)-1):
+            break
+        list1.append((qubits_list[i],qubits_list[i+1]))
+        i=i+1
+        if(i>=len(qubits_list)-1):
+            break
+        list3.append((qubits_list[i],qubits_list[i+1]))
+        i=i+1
+        if(i>=len(qubits_list)-1):
+            break
+        list1.append((qubits_list[i],qubits_list[i+1]))
+        i=i+1
+        if(i>=len(qubits_list)-1):
+            break
+        
+    return [list1,list2,list3]  
+
+def linear_coloring3(qubits_list):
+    list1= []
+    list2 =[]
+    list3 =[]
+
+    i= 0
+    while (i<= len(qubits_list)-1):
+        # print(i)
+        list3.append((qubits_list[i],qubits_list[i+1]))
+        i=i+1
+        if(i>=len(qubits_list)-1):
+            break
+        list1.append((qubits_list[i],qubits_list[i+1]))
+        i=i+1
+        if(i>=len(qubits_list)-1):
+            break
+        
+        
+    return [list1,list2,list3]  
+
+def linear_coloring3(qubits_list):
+    list1= []
+    list2 =[]
+    list3 =[]
+
+    i= 0
+    while (i<= len(qubits_list)-1):
+        # print(i)
+        list3.append((qubits_list[i],qubits_list[i+1]))
+        i=i+1
+        if(i>=len(qubits_list)-1):
+            break
+        list1.append((qubits_list[i],qubits_list[i+1]))
+        i=i+1
+        if(i>=len(qubits_list)-1):
+            break
+        
+        
+    return [list1,list2,list3]  
+
+def shuffle(l):
+    return [l[0],l[2],l[1]]
+
+
+
+for kappa in [0.0001,1,2]:
+    
+
+
+        J=1
+        Delta = 1   # 0.1, 0.3, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0.  ## for \Delta/J < 1 exponent = -1
+                                                                ## for \Delta/J = 1 exponent = -2/3
+                                                                ## for \Delta/J > 1 exponent = -0.5
+        coeff_vector = (J,J,Delta)
+        no_layers = 25
+
+        ladder_coupling_dict = {(5,19):(J*kappa, J*kappa, Delta*kappa), 
+                            (19,14):(J*kappa, J*kappa, Delta*kappa)
+                            }
+
+
+        #**********************************************************************************************************
+
+        list1 = [1,2,3,4,5,6,7,8,9]
+        list2 = [10,11,12,13,14,15,16,17,18]
+        list3 = [1,0,10]
+
+        L=[]
+        L += [linear_coloring1(list1)[0]+linear_coloring2(list2)[0]+linear_coloring3(list3)[0]]
+        L += [linear_coloring1(list1)[1]+linear_coloring2(list2)[1]+linear_coloring3(list3)[1]]
+        L += [linear_coloring1(list1)[2]+linear_coloring2(list2)[2]+linear_coloring3(list3)[2]]
+
+        c_list = shuffle(L)
+
+        connectivity_list = c_list
+            
+        connectivity_list[0].append((5,19))
+        connectivity_list[1].append((19,14))
+        clean_qubit_index = 9
+        probe_qubit_index = clean_qubit_index
+
+
+
+        time_step_length = 1/J
+        time_list = list(np.arange(0, (20*time_step_length), time_step_length))
+
+
+        print(time_list)
+ 
+        KPZ_object = circuit_constructor(coeff_vector=coeff_vector, connectivity_list= connectivity_list, clean_qubit_index = clean_qubit_index, probe_qubit_index=  probe_qubit_index,    
+                        no_layers = no_layers, ladder_coupling_dict=ladder_coupling_dict, 
+                        Evol_time_list = time_list, time_step_length = time_step_length, kappa = kappa, int_type = [[0,0,1],"ZZ"])
+
+        KPZ_object.session_driver()
+
+        KPZ_object = circuit_constructor(coeff_vector=coeff_vector, connectivity_list= connectivity_list, clean_qubit_index = clean_qubit_index, probe_qubit_index=  probe_qubit_index,    
+                        no_layers = no_layers, ladder_coupling_dict=ladder_coupling_dict, 
+                        Evol_time_list = time_list, time_step_length = time_step_length, kappa = kappa, int_type = [[1,1,0],"XY"])
+
+        KPZ_object.session_driver()
+
+        KPZ_object = circuit_constructor(coeff_vector=coeff_vector, connectivity_list= connectivity_list, clean_qubit_index = clean_qubit_index, probe_qubit_index=  probe_qubit_index,    
+                        no_layers = no_layers, ladder_coupling_dict=ladder_coupling_dict, 
+                        Evol_time_list = time_list, time_step_length = time_step_length, kappa = kappa, int_type = [[1,1,1],"XXX"])
+
+        KPZ_object.session_driver()
+
+        KPZ_object = circuit_constructor(coeff_vector=coeff_vector, connectivity_list= connectivity_list, clean_qubit_index = clean_qubit_index, probe_qubit_index=  probe_qubit_index,    
+                        no_layers = no_layers, ladder_coupling_dict=ladder_coupling_dict, 
+                        Evol_time_list = time_list, time_step_length = time_step_length, kappa = kappa, int_type = [[1,0,1],"XZ"])
+        
+
+        KPZ_object.session_driver()
+
+        KPZ_object = circuit_constructor(coeff_vector=coeff_vector, connectivity_list= connectivity_list, clean_qubit_index = clean_qubit_index, probe_qubit_index=  probe_qubit_index,    
+                        no_layers = no_layers, ladder_coupling_dict=ladder_coupling_dict, 
+                        Evol_time_list = time_list, time_step_length = time_step_length, kappa = kappa, int_type = [[1,0,0],"XX"])
+
+        KPZ_object.session_driver()
+
+for kappa in [0.0001,1,2]:
+    
+
+
+        J=1
+        Delta = 1   # 0.1, 0.3, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0.  ## for \Delta/J < 1 exponent = -1
+                                                                ## for \Delta/J = 1 exponent = -2/3
+                                                                ## for \Delta/J > 1 exponent = -0.5
+        coeff_vector = (J,J,Delta)
+        no_layers = 25
+
+        ladder_coupling_dict = {(5,19):(J*kappa, J*kappa, Delta*kappa), 
+                            (19,14):(J*kappa, J*kappa, Delta*kappa)
+                            }
+
+
+        #**********************************************************************************************************
+
+        list1 = [1,2,3,4,5,6,7,8,9]
+        list2 = [10,11,12,13,14,15,16,17,18]
+        list3 = [1,0,10]
+
+        L=[]
+        L += [linear_coloring1(list1)[0]+linear_coloring2(list2)[0]+linear_coloring3(list3)[0]]
+        L += [linear_coloring1(list1)[1]+linear_coloring2(list2)[1]+linear_coloring3(list3)[1]]
+        L += [linear_coloring1(list1)[2]+linear_coloring2(list2)[2]+linear_coloring3(list3)[2]]
+
+        c_list = shuffle(L)
+
+        connectivity_list = c_list
+            
+        connectivity_list[0].append((5,19))
+        connectivity_list[1].append((19,14))
+        clean_qubit_index = 9
+        probe_qubit_index = clean_qubit_index
+
+
+
+        time_step_length = 0.2/J
+        time_list = list(np.arange(0, (100*time_step_length), time_step_length))
+
+
+        print(time_list)
+
+        KPZ_object = circuit_constructor(coeff_vector=coeff_vector, connectivity_list= connectivity_list, clean_qubit_index = clean_qubit_index, probe_qubit_index=  probe_qubit_index,    
+                        no_layers = no_layers, ladder_coupling_dict=ladder_coupling_dict, 
+                        Evol_time_list = time_list, time_step_length = time_step_length, kappa = kappa, int_type = [[0,0,1],"ZZ"])
+
+        KPZ_object.session_driver()
+
+        KPZ_object = circuit_constructor(coeff_vector=coeff_vector, connectivity_list= connectivity_list, clean_qubit_index = clean_qubit_index, probe_qubit_index=  probe_qubit_index,    
+                        no_layers = no_layers, ladder_coupling_dict=ladder_coupling_dict, 
+                        Evol_time_list = time_list, time_step_length = time_step_length, kappa = kappa, int_type = [[1,1,0],"XY"])
+
+        KPZ_object.session_driver()
+
+        KPZ_object = circuit_constructor(coeff_vector=coeff_vector, connectivity_list= connectivity_list, clean_qubit_index = clean_qubit_index, probe_qubit_index=  probe_qubit_index,    
+                        no_layers = no_layers, ladder_coupling_dict=ladder_coupling_dict, 
+                        Evol_time_list = time_list, time_step_length = time_step_length, kappa = kappa, int_type = [[1,1,1],"XXX"])
+
+        KPZ_object.session_driver()
+
+        KPZ_object = circuit_constructor(coeff_vector=coeff_vector, connectivity_list= connectivity_list, clean_qubit_index = clean_qubit_index, probe_qubit_index=  probe_qubit_index,    
+                        no_layers = no_layers, ladder_coupling_dict=ladder_coupling_dict, 
+                        Evol_time_list = time_list, time_step_length = time_step_length, kappa = kappa, int_type = [[1,0,1],"XZ"])
+        
+
+        KPZ_object.session_driver()
+
+        KPZ_object = circuit_constructor(coeff_vector=coeff_vector, connectivity_list= connectivity_list, clean_qubit_index = clean_qubit_index, probe_qubit_index=  probe_qubit_index,    
+                        no_layers = no_layers, ladder_coupling_dict=ladder_coupling_dict, 
+                        Evol_time_list = time_list, time_step_length = time_step_length, kappa = kappa, int_type = [[1,0,0],"XX"])
+
+        KPZ_object.session_driver()
+
+
+
+ 
+for kappa in [0.0001,1,2]:
+    
+
+
+        J=1
+        Delta = 1   # 0.1, 0.3, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0.  ## for \Delta/J < 1 exponent = -1
+                                                                ## for \Delta/J = 1 exponent = -2/3
+                                                                ## for \Delta/J > 1 exponent = -0.5
+        coeff_vector = (J,J,Delta)
+        no_layers = 25
+
+        ladder_coupling_dict = {(5,19):(J*kappa, J*kappa, Delta*kappa), 
+                            (19,14):(J*kappa, J*kappa, Delta*kappa)
+                            }
+
+
+        #**********************************************************************************************************
+
+        list1 = [1,2,3,4,5,6,7,8,9]
+        list2 = [10,11,12,13,14,15,16,17,18]
+        list3 = [1,0,10]
+
+        L=[]
+        L += [linear_coloring1(list1)[0]+linear_coloring2(list2)[0]+linear_coloring3(list3)[0]]
+        L += [linear_coloring1(list1)[1]+linear_coloring2(list2)[1]+linear_coloring3(list3)[1]]
+        L += [linear_coloring1(list1)[2]+linear_coloring2(list2)[2]+linear_coloring3(list3)[2]]
+
+        c_list = shuffle(L)
+
+        connectivity_list = c_list
+            
+        connectivity_list[0].append((5,19))
+        connectivity_list[1].append((19,14))
+        clean_qubit_index = 9
+        probe_qubit_index = clean_qubit_index
+
+
+
+        time_step_length = 2/J
+        time_list = list(np.arange(0, (20*time_step_length), time_step_length))
+
+
+        print(time_list)
+
+        KPZ_object = circuit_constructor(coeff_vector=coeff_vector, connectivity_list= connectivity_list, clean_qubit_index = clean_qubit_index, probe_qubit_index=  probe_qubit_index,    
+                        no_layers = no_layers, ladder_coupling_dict=ladder_coupling_dict, 
+                        Evol_time_list = time_list, time_step_length = time_step_length, kappa = kappa, int_type = [[0,0,1],"ZZ"])
+
+        KPZ_object.session_driver()
+
+        KPZ_object = circuit_constructor(coeff_vector=coeff_vector, connectivity_list= connectivity_list, clean_qubit_index = clean_qubit_index, probe_qubit_index=  probe_qubit_index,    
+                        no_layers = no_layers, ladder_coupling_dict=ladder_coupling_dict, 
+                        Evol_time_list = time_list, time_step_length = time_step_length, kappa = kappa, int_type = [[1,1,0],"XY"])
+
+        KPZ_object.session_driver()
+
+        KPZ_object = circuit_constructor(coeff_vector=coeff_vector, connectivity_list= connectivity_list, clean_qubit_index = clean_qubit_index, probe_qubit_index=  probe_qubit_index,    
+                        no_layers = no_layers, ladder_coupling_dict=ladder_coupling_dict, 
+                        Evol_time_list = time_list, time_step_length = time_step_length, kappa = kappa, int_type = [[1,1,1],"XXX"])
+
+        KPZ_object.session_driver()
+
+        KPZ_object = circuit_constructor(coeff_vector=coeff_vector, connectivity_list= connectivity_list, clean_qubit_index = clean_qubit_index, probe_qubit_index=  probe_qubit_index,    
+                        no_layers = no_layers, ladder_coupling_dict=ladder_coupling_dict, 
+                        Evol_time_list = time_list, time_step_length = time_step_length, kappa = kappa, int_type = [[1,0,1],"XZ"])
+        
+
+        KPZ_object.session_driver()
+
+        KPZ_object = circuit_constructor(coeff_vector=coeff_vector, connectivity_list= connectivity_list, clean_qubit_index = clean_qubit_index, probe_qubit_index=  probe_qubit_index,    
+                        no_layers = no_layers, ladder_coupling_dict=ladder_coupling_dict, 
+                        Evol_time_list = time_list, time_step_length = time_step_length, kappa = kappa, int_type = [[1,0,0],"XX"])
+
+        KPZ_object.session_driver()
+
+
+
+
+    
